@@ -156,10 +156,10 @@
         <button id="tExp" class="exp on">รายจ่าย</button>
         <button id="tInc" class="inc">รายรับ</button>
       </div>
-      <input id="amount" class="amount" type="number" inputmode="decimal" placeholder="0" min="0" step="any">
+      <input id="amount" class="amount" type="number" inputmode="decimal" enterkeyhint="done" placeholder="0" min="0" step="any">
       <div class="chips" id="chips"></div>
       <div class="row">
-        <input id="note" type="text" placeholder="รายการ (ไม่บังคับ)" maxlength="200">
+        <input id="note" type="text" enterkeyhint="done" placeholder="รายการ (ไม่บังคับ)" maxlength="200">
         <input id="date" type="date">
       </div>
       <button class="btn save" id="save">บันทึก</button>
@@ -419,7 +419,12 @@ function askSplit(total){
       $('splitSum').classList.toggle('bad', !ok);
       $('splitOk').disabled = !ok; $('splitOk').style.opacity = ok ? 1 : .4;
     };
-    inputs.forEach(i => i.oninput = check); check();
+    inputs.forEach(i => {
+      i.oninput = check;
+      i.setAttribute('enterkeyhint', 'done');
+      i.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); if (!$('splitOk').disabled) $('splitOk').click(); } };
+    });
+    check();
     const close = v => { $('splitModal').classList.add('hidden'); resolve(v); };
     $('splitCancel').onclick = () => close(null);
     $('splitOk').onclick = () => {
@@ -643,6 +648,13 @@ $('saveEdit').onclick = async () => {
   toast('แก้ไขแล้ว ✓');
 };
 $('cancelEdit').onclick = stopEdit;
+// กดปุ่ม Enter / ✓ / → บนคีย์บอร์ดมือถือ = กดบันทึก
+['amount', 'note'].forEach(id => $(id).addEventListener('keydown', e => {
+  if (e.key !== 'Enter' || e.isComposing) return;
+  e.preventDefault();
+  e.target.blur(); // ปิดคีย์บอร์ด
+  (editing ? $('saveEdit') : $('save')).click();
+}));
 $('tExp').onclick = () => setType('exp');
 $('tInc').onclick = () => setType('inc');
 $('prev').onclick = () => { view = new Date(view.getFullYear(), view.getMonth() - 1, 1); listen(); };
