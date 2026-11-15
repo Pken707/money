@@ -93,7 +93,7 @@
   .editing{outline:2px solid var(--accent)}
   .goal .big{font-size:22px;font-weight:700;font-variant-numeric:tabular-nums}
   .goal .acts{display:flex;gap:8px;margin-top:12px}
-  .goal .acts .btn{flex:1}
+  .goal .acts .btn{flex:1;padding:11px 8px}
   .setrow{display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid var(--line)}
   .setrow:last-child{border-bottom:0}
   .setrow span{flex:1;min-width:0}
@@ -111,6 +111,11 @@
   .login img{width:88px;height:88px;border-radius:22px}
   .login p{color:var(--muted);margin:0 0 8px}
   .gbtn{border:1px solid var(--line);background:var(--card);color:var(--text);padding:14px 22px;border-radius:12px;font-size:16px;font-weight:600}
+  .modal{position:fixed;inset:0;background:rgba(0,0,0,.45);display:flex;align-items:flex-end;justify-content:center;z-index:20}
+  .sheet{background:var(--card);width:100%;max-width:520px;border-radius:20px 20px 0 0;padding:20px 16px calc(env(safe-area-inset-bottom) + 16px)}
+  .sheet h3{margin:0 0 4px;font-size:18px}
+  .sheet .sum{font-size:14px;margin:10px 0 14px}
+  .sheet .sum.bad{color:var(--red)}
   .hidden{display:none!important}
 </style>
 </head>
@@ -213,6 +218,13 @@
       <div class="balance" id="gTotal" style="margin-bottom:0">0</div>
     </div>
     <div id="goals"></div>
+    <div class="card hidden" id="pctCard">
+      <h2>แบ่งเงินออมอัตโนมัติ (%)</h2>
+      <div id="pctRows"></div>
+      <div class="muted" id="pctSum" style="margin-top:8px"></div>
+      <button class="btn save" id="savePct">บันทึกการแบ่ง</button>
+      <div class="note">เวลาบันทึกหมวด 💰 เงินออม ในหน้าบันทึก แอปจะแบ่งเงินตาม % นี้ให้อัตโนมัติ (แก้ตัวเลขก่อนยืนยันได้) เป้าหมายที่ถึงแล้วจะไม่ถูกแบ่งให้</div>
+    </div>
     <div class="card">
       <h2>เพิ่มเป้าหมายใหม่</h2>
       <div class="row">
@@ -220,7 +232,7 @@
         <input id="gTarget" class="small" type="number" inputmode="decimal" placeholder="บาท" min="0">
       </div>
       <button class="btn save" id="gAdd">เพิ่มเป้าหมาย</button>
-      <div class="note">เวลากด "ใส่เงิน" แอปจะลงรายการหมวด 💰 เงินออม ในหน้าบันทึกให้อัตโนมัติ อย่าลืมโอนเงินจริงไปบัญชีออมด้วย</div>
+      <div class="note">ออมได้ 2 ทาง: กด "ใส่เงิน" ที่เป้าหมาย หรือบันทึกหมวด 💰 เงินออม ในหน้าบันทึก (แอปจะแบ่งเข้าเป้าหมายให้) อย่าลืมโอนเงินจริงไปบัญชีออมด้วย</div>
     </div>
   </section>
 
@@ -288,6 +300,18 @@
   <button data-p="settings"><span>⚙️</span>ตั้งค่า</button>
 </nav>
 </div>
+<div class="modal hidden" id="splitModal">
+  <div class="sheet">
+    <h3 id="splitTitle">แบ่งเงินออม</h3>
+    <div class="muted">ใส่จำนวนที่จะเข้าแต่ละเป้าหมาย (ตั้ง % ล่วงหน้าได้ในหน้าเป้าหมาย)</div>
+    <div id="splitRows" style="margin-top:8px"></div>
+    <div class="sum" id="splitSum"></div>
+    <div class="row">
+      <button class="btn ghost" id="splitCancel" style="flex:1">ยกเลิก</button>
+      <button class="btn" id="splitOk" style="flex:2">ยืนยัน</button>
+    </div>
+  </div>
+</div>
 <div class="toast" id="toast"><span id="toastMsg"></span><button id="toastAct"></button></div>
 
 <script type="module">
@@ -316,6 +340,7 @@ if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catc
 
 // ---------- ค่าเริ่มต้น ----------
 const SAVING = 'เงินออม';
+const WITHDRAW = 'ถอนเงินออม';
 const DEFAULT_SETTINGS = {
   cats: {
     exp: [['🍚','อาหาร'],['🧋','เครื่องดื่ม'],['🚌','เดินทาง'],['📚','การเรียน'],['🧴','ของใช้'],['🎮','บันเทิง/เที่ยว'],['🛍️','ช้อปปิ้ง'],['📦','อื่นๆ']].map(([icon,name]) => ({icon,name})),
@@ -332,7 +357,7 @@ const DEFAULT_SETTINGS = {
 // ---------- สถานะ ----------
 let user = null, settings = structuredClone(DEFAULT_SETTINGS), goals = [], data = [];
 let unsubEntries = null, unsubSettings = null, unsubGoals = null, curRange = '';
-let type = 'exp', cat = 'อาหาร', editing = null;
+let type = 'exp', cat = 'อาหาร', editing = null, dateTouched = false;
 let view = firstOfMonth(new Date());
 let sMode = 'week', sAnchor = new Date();
 let page = 'record';
@@ -352,8 +377,61 @@ function weekStart(d){ const x = startOfDay(d); return addDays(x, -((x.getDay() 
 function daysInMonth(d){ return new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate(); }
 function esc(s){ return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 function sum(rows){ return rows.reduce((s,x) => s + x.amount, 0); }
+// เงินออมของรายการหนึ่งถูกแบ่งเข้าเป้าหมายไหนเท่าไร (รองรับรายการแบบเก่าที่มี goalId)
+function allocOf(x){
+  if (x.alloc) return x.alloc;
+  if (x.goalId) return { [x.goalId]: x.cat === WITHDRAW ? -x.amount : x.amount };
+  return null;
+}
+function applyAlloc(batch, alloc, sign){
+  if (!alloc) return;
+  for (const [gid, amt] of Object.entries(alloc))
+    if (goals.some(g => g.id === gid) && amt) batch.update(doc(col('goals'), gid), { saved: increment(sign * amt) });
+}
+// คำนวณยอดแนะนำตาม % ที่ตั้งไว้ (ไม่แบ่งให้เป้าหมายที่ถึงแล้ว)
+function suggestSplit(total){
+  let pool = goals.filter(g => (g.saved || 0) < g.target);
+  if (!pool.length) pool = goals.slice();
+  let w = pool.map(g => Number(g.pct) || 0);
+  if (w.every(v => v <= 0)) w = pool.map(() => 1);
+  const tw = w.reduce((a,b) => a + b, 0);
+  const out = {}; let used = 0;
+  pool.forEach((g, i) => { const v = Math.floor(total * w[i] / tw); out[g.id] = v; used += v; });
+  const rest = Math.round((total - used) * 100) / 100;
+  if (rest) { const top = pool[w.indexOf(Math.max(...w))]; out[top.id] = Math.round((out[top.id] + rest) * 100) / 100; }
+  return out;
+}
+// หน้าต่างแบ่งเงิน: คืนค่า {goalId: จำนวน} หรือ null ถ้ากดยกเลิก
+function askSplit(total){
+  if (!goals.length) return Promise.resolve(null);
+  if (goals.length === 1) return Promise.resolve({ [goals[0].id]: total });
+  return new Promise(resolve => {
+    const sug = suggestSplit(total);
+    $('splitTitle').textContent = `แบ่งเงินออม ${fmt(total)} บาท`;
+    $('splitRows').innerHTML = goals.map(g => `
+      <div class="setrow"><span>🎯 ${esc(g.name)} <span class="muted">(${fmt(g.saved || 0)}/${fmt(g.target)})</span></span>
+      <input type="number" inputmode="decimal" min="0" data-g="${esc(g.id)}" value="${sug[g.id] || ''}" placeholder="0"></div>`).join('');
+    const inputs = [...$('splitRows').querySelectorAll('input')];
+    const check = () => {
+      const t = inputs.reduce((s, i) => s + (parseFloat(i.value) || 0), 0);
+      const ok = Math.abs(t - total) < 0.01;
+      $('splitSum').textContent = ok ? `รวม ${fmt(t)} / ${fmt(total)} ✓` : `รวม ${fmt(t)} / ${fmt(total)} — ${t < total ? `ยังขาด ${fmt(total - t)}` : `เกิน ${fmt(t - total)}`}`;
+      $('splitSum').classList.toggle('bad', !ok);
+      $('splitOk').disabled = !ok; $('splitOk').style.opacity = ok ? 1 : .4;
+    };
+    inputs.forEach(i => i.oninput = check); check();
+    const close = v => { $('splitModal').classList.add('hidden'); resolve(v); };
+    $('splitCancel').onclick = () => close(null);
+    $('splitOk').onclick = () => {
+      const a = {}; inputs.forEach(i => { const v = parseFloat(i.value) || 0; if (v > 0) a[i.dataset.g] = v; });
+      close(a);
+    };
+    $('splitModal').classList.remove('hidden');
+  });
+}
 function icon(name){
   if (name === SAVING) return '💰';
+  if (name === WITHDRAW) return '🏦';
   const c = [...settings.cats.exp, ...settings.cats.inc].find(c => c.name === name);
   return c ? c.icon : '•';
 }
@@ -493,7 +571,7 @@ function renderRecord(){
 function removeEntry(x){
   const batch = writeBatch(db);
   batch.delete(doc(col('entries'), x.id));
-  if (x.goalId && goals.some(g => g.id === x.goalId)) batch.update(doc(col('goals'), x.goalId), { saved: increment(-x.amount) });
+  applyAlloc(batch, allocOf(x), -1);
   batch.commit().catch(() => toast('ลบไม่สำเร็จ'));
   if (editing && editing.id === x.id) stopEdit();
 }
@@ -511,31 +589,55 @@ function startEdit(x){
 function stopEdit(){
   editing = null;
   $('formCard').classList.remove('editing');
-  $('amount').value = ''; $('note').value = ''; $('date').value = todayStr();
+  $('amount').value = ''; $('note').value = ''; resetDate();
   setType('exp');
 }
+function resetDate(){ dateTouched = false; $('date').value = todayStr(); }
+$('date').oninput = () => { dateTouched = true; };
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState !== 'visible') return;
+  if (!editing && !dateTouched) $('date').value = todayStr();
+  if (user) { if (!editing && monthKey(view) !== monthKey(new Date()) && !dateTouched) view = firstOfMonth(new Date()); listen(); }
+});
 function readForm(){
   const amount = parseFloat($('amount').value);
   if (!(amount > 0)) { toast('ใส่จำนวนเงินก่อนนะ'); $('amount').focus(); return null; }
   return { date: $('date').value || todayStr(), type, cat, amount, note: $('note').value.trim().slice(0, 200) };
 }
-$('save').onclick = () => {
+$('save').onclick = async () => {
   const f = readForm(); if (!f) return;
-  setDoc(doc(col('entries')), { ...f, created: Date.now() }).catch(() => toast('บันทึกไม่สำเร็จ'));
-  $('amount').value = ''; $('note').value = '';
+  const entry = { ...f, created: Date.now() };
+  if (f.type === 'exp' && f.cat === SAVING && goals.length) {
+    const alloc = await askSplit(f.amount);
+    if (!alloc) return; // กดยกเลิก
+    entry.alloc = alloc;
+  }
+  const batch = writeBatch(db);
+  batch.set(doc(col('entries')), entry);
+  applyAlloc(batch, entry.alloc, 1);
+  batch.commit().catch(() => toast('บันทึกไม่สำเร็จ'));
+  $('amount').value = ''; $('note').value = ''; resetDate();
   const [y, m] = f.date.split('-');
   if (monthKey(view) !== `${y}-${m}`) { view = new Date(+y, +m - 1, 1); listen(); }
   toast('บันทึกแล้ว ✓');
 };
-$('saveEdit').onclick = () => {
+$('saveEdit').onclick = async () => {
   const f = readForm(); if (!f || !editing) return;
   const old = editing;
-  const batch = writeBatch(db);
+  const oldAlloc = allocOf(old);
   const next = { ...f, created: old.created || Date.now() };
-  if (old.goalId) next.goalId = old.goalId;
+  let newAlloc = null;
+  if (f.cat === old.cat && oldAlloc && f.amount === old.amount) newAlloc = oldAlloc;
+  else if (f.cat === WITHDRAW && oldAlloc && Object.keys(oldAlloc).length === 1) newAlloc = { [Object.keys(oldAlloc)[0]]: -f.amount };
+  else if (f.type === 'exp' && f.cat === SAVING && goals.length) {
+    newAlloc = await askSplit(f.amount);
+    if (!newAlloc) return;
+  }
+  if (newAlloc) next.alloc = newAlloc;
+  const batch = writeBatch(db);
   batch.set(doc(col('entries'), old.id), next);
-  if (old.goalId && goals.some(g => g.id === old.goalId) && f.amount !== old.amount)
-    batch.update(doc(col('goals'), old.goalId), { saved: increment(f.amount - old.amount) });
+  applyAlloc(batch, oldAlloc, -1);
+  applyAlloc(batch, newAlloc, 1);
   batch.commit().catch(() => toast('แก้ไขไม่สำเร็จ'));
   stopEdit();
   toast('แก้ไขแล้ว ✓');
@@ -573,8 +675,8 @@ function renderSummary(){
   const spend = rows => rows.filter(x => x.type === 'exp' && x.cat !== SAVING);
   const curSpend = sum(spend(cur)), prvSpend = sum(spend(prv));
   $('sSpend').textContent = fmt(curSpend);
-  $('sIn').textContent = fmt(sum(cur.filter(x => x.type === 'inc')));
-  $('sSave').textContent = fmt(sum(cur.filter(x => x.cat === SAVING && x.type === 'exp')));
+  $('sIn').textContent = fmt(sum(cur.filter(x => x.type === 'inc' && x.cat !== WITHDRAW)));
+  $('sSave').textContent = fmt(sum(cur.filter(x => x.cat === SAVING && x.type === 'exp')) - sum(cur.filter(x => x.cat === WITHDRAW)));
   // เฉลี่ยต่อวัน: นับเฉพาะวันที่ผ่านมาแล้วในช่วงนี้
   const today = startOfDay(new Date());
   const lastDay = p.end > today ? addDays(today, 1) : p.end;
@@ -642,20 +744,54 @@ function renderGoals(){
       <div class="bar-track" style="margin:8px 0 6px"><div class="bar-fill" style="width:${Math.min(100, r * 100)}%"></div></div>
       <div class="muted">${saved >= g.target ? '🎉 ถึงเป้าแล้ว เก่งมาก!' : `อีก ${fmt(g.target - saved)} บาท`}</div>
       <div class="acts"><button class="btn" data-dep="${esc(g.id)}">+ ใส่เงิน</button>
+      <button class="btn ghost" data-wd="${esc(g.id)}">− ถอน</button>
       <button class="btn ghost" data-del="${esc(g.id)}" style="flex:0 0 auto">ลบ</button></div></div>`;
   }).join('') : '<div class="card empty">ยังไม่มีเป้าหมาย ลองเพิ่มข้างล่างดูสิ</div>';
   $('goals').querySelectorAll('[data-dep]').forEach(b => b.onclick = () => deposit(goals.find(g => g.id === b.dataset.dep)));
+  $('goals').querySelectorAll('[data-wd]').forEach(b => b.onclick = () => withdraw(goals.find(g => g.id === b.dataset.wd)));
+  // การ์ดตั้ง %
+  $('pctCard').classList.toggle('hidden', goals.length < 2);
+  if (goals.length >= 2) {
+    const anySet = goals.some(g => Number(g.pct) > 0);
+    $('pctRows').innerHTML = goals.map(g => `
+      <div class="setrow"><span>🎯 ${esc(g.name)}</span>
+      <input type="number" inputmode="decimal" min="0" max="100" data-pg="${esc(g.id)}" value="${anySet ? (Number(g.pct) || 0) : Math.round(100 / goals.length)}"></div>`).join('');
+    const upd = () => {
+      const t = [...$('pctRows').querySelectorAll('input')].reduce((s, i) => s + (parseFloat(i.value) || 0), 0);
+      $('pctSum').textContent = `รวม ${fmt(t)}%` + (Math.round(t) === 100 ? ' ✓' : ' (ไม่ครบ 100 ก็ได้ แอปจะเทียบสัดส่วนให้)');
+    };
+    $('pctRows').querySelectorAll('input').forEach(i => i.oninput = upd); upd();
+  }
   $('goals').querySelectorAll('[data-del]').forEach(b => b.onclick = () => {
     const g = goals.find(x => x.id === b.dataset.del);
     if (g && confirm(`ลบเป้าหมาย "${g.name}"?\n(รายการเงินออมในหน้าบันทึกยังอยู่)`)) deleteDoc(doc(col('goals'), g.id));
   });
+}
+$('savePct').onclick = () => {
+  const batch = writeBatch(db);
+  $('pctRows').querySelectorAll('input').forEach(i => batch.update(doc(col('goals'), i.dataset.pg), { pct: Math.max(0, parseFloat(i.value) || 0) }));
+  batch.commit().catch(() => toast('บันทึกไม่สำเร็จ'));
+  toast('บันทึกการแบ่งแล้ว ✓');
+};
+function withdraw(g){
+  if (!g) return;
+  const saved = g.saved || 0;
+  if (saved <= 0) { toast('เป้าหมายนี้ยังไม่มีเงิน'); return; }
+  const v = parseFloat(prompt(`ถอนเงินจาก "${g.name}" กี่บาท? (มีอยู่ ${fmt(saved)})`) || '');
+  if (!(v > 0)) return;
+  if (v > saved) { toast(`ถอนได้ไม่เกิน ${fmt(saved)} บาท`); return; }
+  const batch = writeBatch(db);
+  batch.set(doc(col('entries')), { date: todayStr(), type: 'inc', cat: WITHDRAW, amount: v, note: `ถอน: ${g.name}`, alloc: { [g.id]: -v }, created: Date.now() });
+  batch.update(doc(col('goals'), g.id), { saved: increment(-v) });
+  batch.commit().catch(() => toast('บันทึกไม่สำเร็จ'));
+  toast(`ถอนจาก ${g.name} ${fmt(v)} ✓ (เงินกลับเข้ายอดคงเหลือ)`);
 }
 function deposit(g){
   if (!g) return;
   const v = parseFloat(prompt(`ใส่เงินเข้า "${g.name}" กี่บาท?`) || '');
   if (!(v > 0)) return;
   const batch = writeBatch(db);
-  batch.set(doc(col('entries')), { date: todayStr(), type: 'exp', cat: SAVING, amount: v, note: `ออม: ${g.name}`, goalId: g.id, created: Date.now() });
+  batch.set(doc(col('entries')), { date: todayStr(), type: 'exp', cat: SAVING, amount: v, note: `ออม: ${g.name}`, alloc: { [g.id]: v }, created: Date.now() });
   batch.update(doc(col('goals'), g.id), { saved: increment(v) });
   batch.commit().catch(() => toast('บันทึกไม่สำเร็จ'));
   toast(`ออมเข้า ${g.name} ${fmt(v)} ✓`);
