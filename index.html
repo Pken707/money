@@ -103,7 +103,7 @@
   .tabbar button span{font-size:22px;filter:grayscale(1);opacity:.7}
   .tabbar button.on{color:var(--accent);font-weight:700}
   .tabbar button.on span{filter:none;opacity:1}
-  .toast{position:fixed;left:50%;bottom:calc(env(safe-area-inset-bottom) + 80px);transform:translateX(-50%) translateY(20px);background:var(--text);color:var(--bg);padding:10px 16px;border-radius:99px;font-size:14px;opacity:0;transition:.25s;pointer-events:none;display:flex;gap:12px;align-items:center;white-space:nowrap;z-index:10}
+  .toast{position:fixed;left:50%;bottom:calc(env(safe-area-inset-bottom) + 80px);transform:translateX(-50%) translateY(20px);background:var(--text);color:var(--bg);padding:10px 16px;border-radius:99px;font-size:14px;opacity:0;transition:.25s;pointer-events:none;display:flex;gap:12px;align-items:center;width:max-content;max-width:92vw;text-align:center;border-radius:18px;z-index:10}
   .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
   .toast.show.act{pointer-events:auto}
   .toast button{border:0;background:transparent;color:var(--accent);font-weight:700;font-size:14px;padding:0}
@@ -244,10 +244,17 @@
     <header><h1>ตั้งค่า</h1></header>
 
     <div class="card">
-      <h2>งบประมาณรายเดือน</h2>
+      <h2>งบประมาณ</h2>
+      <div class="toggle" id="bUnit">
+        <button data-u="week">ต่อสัปดาห์</button>
+        <button data-u="month">ต่อเดือน</button>
+      </div>
       <div id="budgetRows"></div>
-      <button class="btn save" id="saveBudgets">บันทึกงบ</button>
-      <div class="note">ใส่เฉพาะหมวดที่อยากคุม ปล่อยว่าง = ไม่ตั้งงบ แอปจะแบ่งเป็นงบรายวันและรายสัปดาห์ให้เองในหน้าสรุป</div>
+      <div class="row" style="margin-top:12px">
+        <button class="btn ghost" id="suggestBudgets" style="flex:1">✨ ตั้งตามที่ใช้จริง</button>
+        <button class="btn" id="saveBudgets" style="flex:1">บันทึกงบ</button>
+      </div>
+      <div class="note">ใส่เฉพาะหมวดที่อยากคุม ปล่อยว่าง = ไม่ตั้งงบ · งบใช้ไปเรื่อยๆ จนกว่าจะแก้ · แอปแปลงเป็นรายวัน/สัปดาห์/เดือนให้เองตามจำนวนวันจริงของแต่ละเดือน · "ตั้งตามที่ใช้จริง" ใช้ค่าเฉลี่ย 4 สัปดาห์ที่ผ่านมา (แก้ตัวเลขก่อนบันทึกได้)</div>
     </div>
 
     <div class="card">
@@ -292,7 +299,7 @@
         <button class="btn ghost" id="exportCsv" style="flex:1">ส่งออก CSV</button>
         <button class="btn ghost" id="logoutBtn" style="flex:1">ออกจากระบบ</button>
       </div>
-      <div class="note">เวอร์ชัน 1.6 (16 พ.ย. 2569)</div>
+      <div class="note">เวอร์ชัน 1.7 (16 พ.ย. 2569)</div>
     </div>
   </section>
 
@@ -355,7 +362,8 @@ const DEFAULT_SETTINGS = {
     {icon:'🧋', label:'ชานม', amount:45, cat:'เครื่องดื่ม', type:'exp'},
     {icon:'🚌', label:'ค่ารถ', amount:40, cat:'เดินทาง', type:'exp'}
   ],
-  budgets: {}
+  budgets: {},
+  budgetUnit: 'week'
 };
 
 // ---------- สถานะ ----------
@@ -364,7 +372,7 @@ let unsubEntries = null, unsubSettings = null, unsubGoals = null, curRange = '';
 let type = 'exp', cat = 'อาหาร', editing = null, dateTouched = false;
 let view = firstOfMonth(new Date());
 let sMode = 'week', sAnchor = new Date();
-let page = 'record';
+let page = 'record', uiUnit = 'week';
 
 // ---------- ตัวช่วย ----------
 const $ = id => document.getElementById(id);
@@ -666,11 +674,15 @@ $('prev').onclick = () => { view = new Date(view.getFullYear(), view.getMonth() 
 $('next').onclick = () => { view = new Date(view.getFullYear(), view.getMonth() + 1, 1); listen(); };
 
 // ---------- หน้า สรุป ----------
-function budgetFor(catName, p){
+function dailyBudget(catName, day){
   const b = Number(settings.budgets[catName]) || 0;
   if (!b) return 0;
-  const dim = daysInMonth(p.start);
-  return sMode === 'month' ? b : sMode === 'week' ? b * 7 / dim : b / dim;
+  return settings.budgetUnit === 'month' ? b / daysInMonth(day) : b / 7;
+}
+function budgetFor(catName, p){
+  let t = 0;
+  for (let d = new Date(p.start); d < p.end; d = addDays(d, 1)) t += dailyBudget(catName, d);
+  return t;
 }
 function barClass(r){ return r > 1 ? 'over' : r >= 0.8 ? 'warn' : ''; }
 function deltaHtml(cur, prev){
@@ -848,7 +860,46 @@ $('gAdd').onclick = () => {
 
 // ---------- หน้า ตั้งค่า ----------
 function saveSettings(){ return setDoc(settingsRef(), settings).catch(() => toast('บันทึกการตั้งค่าไม่สำเร็จ')); }
+function setUnitUI(u){
+  uiUnit = u;
+  $('bUnit').querySelectorAll('button').forEach(b => b.classList.toggle('on', b.dataset.u === u));
+}
+// แปลงตัวเลขในช่องเมื่อสลับหน่วย (ใช้จำนวนวันจริงของเดือนนี้)
+$('bUnit').querySelectorAll('button').forEach(b => b.onclick = () => {
+  const u = b.dataset.u; if (u === uiUnit) return;
+  const dim = daysInMonth(new Date());
+  $('budgetRows').querySelectorAll('input').forEach(i => {
+    const v = parseFloat(i.value); if (!(v > 0)) return;
+    i.value = Math.round(u === 'week' ? v * 7 / dim : v * dim / 7);
+  });
+  setUnitUI(u);
+});
+$('suggestBudgets').onclick = async () => {
+  // ค่าเฉลี่ยต่อสัปดาห์จาก 4 สัปดาห์เต็มที่ผ่านมา (ถ้าเพิ่งเริ่มจด ใช้เท่าที่มี)
+  const end = weekStart(new Date()), start = addDays(end, -28);
+  const snap = await getDocs(query(col('entries'), where('date', '>=', ymd(start)), where('date', '<', ymd(addDays(startOfDay(new Date()), 1)))));
+  let rows = snap.docs.map(d => d.data()).filter(x => x.type === 'exp' && x.cat !== SAVING);
+  const full = rows.filter(x => x.date < ymd(end));
+  let from, to;
+  const first = r => r.reduce((m, x) => (!m || x.date < m) ? x.date : m, null);
+  if (full.length) { rows = full; const f = first(full); from = f > ymd(start) ? f : ymd(start); to = end; }
+  else { from = first(rows); to = addDays(startOfDay(new Date()), 1); }
+  if (!rows.length) { toast('ยังไม่มีข้อมูลรายจ่ายพอให้คำนวณ'); return; }
+  const fromD = new Date(+from.slice(0,4), +from.slice(5,7) - 1, +from.slice(8,10));
+  const days = Math.max(1, Math.round((to - fromD) / 86400000));
+  const dim = daysInMonth(new Date());
+  let filled = 0;
+  $('budgetRows').querySelectorAll('input').forEach(i => {
+    const spent = sum(rows.filter(x => x.cat === i.dataset.b));
+    if (!spent) { i.value = ''; return; }
+    const perWeek = spent * 7 / days;
+    const v = uiUnit === 'week' ? perWeek : perWeek * dim / 7;
+    i.value = Math.ceil(v / 10) * 10; filled++;
+  });
+  toast(`ใส่ตัวเลขจาก ${days} วันที่ผ่านมาแล้ว กด "บันทึกงบ" เพื่อยืนยัน`);
+};
 function renderSettings(){
+  setUnitUI(settings.budgetUnit || 'week');
   $('budgetRows').innerHTML = settings.cats.exp.map(c => `
     <div class="setrow"><span>${esc(c.icon)} ${esc(c.name)}</span>
     <input type="number" inputmode="decimal" min="0" placeholder="-" data-b="${esc(c.name)}" value="${settings.budgets[c.name] || ''}"></div>`).join('');
@@ -883,7 +934,8 @@ function refreshSettingsUI(){ renderSettings(); renderChips(); renderQuick(); re
 $('saveBudgets').onclick = () => {
   const b = {};
   $('budgetRows').querySelectorAll('input').forEach(i => { const v = parseFloat(i.value); if (v > 0) b[i.dataset.b] = v; });
-  settings.budgets = b; saveSettings(); toast('บันทึกงบแล้ว ✓');
+  settings.budgets = b; settings.budgetUnit = uiUnit; saveSettings();
+  toast(`บันทึกงบ${uiUnit === 'week' ? 'รายสัปดาห์' : 'รายเดือน'}แล้ว ✓`);
 };
 $('qAdd').onclick = () => {
   const label = $('qLabel').value.trim(), amount = parseFloat($('qAmount').value);
@@ -947,6 +999,13 @@ onAuthStateChanged(auth, u => {
   unsubSettings = onSnapshot(settingsRef(), snap => {
     const s = snap.data();
     settings = s ? { ...structuredClone(DEFAULT_SETTINGS), ...s } : structuredClone(DEFAULT_SETTINGS);
+    if (s && !s.budgetUnit) {
+      // งบที่ตั้งไว้ก่อนหน้านี้เป็นรายเดือน → แปลงเป็นรายสัปดาห์ตามจำนวนวันจริงของเดือนนี้
+      const dim = daysInMonth(new Date());
+      for (const k in settings.budgets) settings.budgets[k] = Math.round(settings.budgets[k] * 7 / dim);
+      settings.budgetUnit = 'week';
+      if (!snap.metadata.fromCache) saveSettings();
+    }
     if (!s && !snap.metadata.fromCache) saveSettings(); // บัญชีใหม่: บันทึกค่าเริ่มต้น
     if (!editing) renderChips();
     renderQuick(); renderAll();
