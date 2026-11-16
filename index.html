@@ -156,12 +156,15 @@
         <button id="tExp" class="exp on">รายจ่าย</button>
         <button id="tInc" class="inc">รายรับ</button>
       </div>
+      <form id="entryForm" autocomplete="off" novalidate>
+      <button type="submit" hidden></button>
       <input id="amount" class="amount" type="number" inputmode="decimal" enterkeyhint="done" placeholder="0" min="0" step="any">
       <div class="chips" id="chips"></div>
       <div class="row">
         <input id="note" type="text" enterkeyhint="done" placeholder="รายการ (ไม่บังคับ)" maxlength="200">
         <input id="date" type="date">
       </div>
+      </form>
       <button class="btn save" id="save">บันทึก</button>
       <div class="editbar">
         <button class="btn ghost" id="cancelEdit" style="flex:1">ยกเลิก</button>
@@ -289,6 +292,7 @@
         <button class="btn ghost" id="exportCsv" style="flex:1">ส่งออก CSV</button>
         <button class="btn ghost" id="logoutBtn" style="flex:1">ออกจากระบบ</button>
       </div>
+      <div class="note">เวอร์ชัน 1.5 (16 พ.ย. 2569)</div>
     </div>
   </section>
 
@@ -336,7 +340,7 @@ const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = initializeFirestore(app, { localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }) });
 
-if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).catch(() => {});
 
 // ---------- ค่าเริ่มต้น ----------
 const SAVING = 'เงินออม';
@@ -422,7 +426,7 @@ function askSplit(total){
     inputs.forEach(i => {
       i.oninput = check;
       i.setAttribute('enterkeyhint', 'done');
-      i.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); if (!$('splitOk').disabled) $('splitOk').click(); } };
+      i.onkeydown = e => { if (e.key === 'Enter' || e.keyCode === 13) { e.preventDefault(); if (!$('splitOk').disabled) $('splitOk').click(); } };
     });
     check();
     const close = v => { $('splitModal').classList.add('hidden'); resolve(v); };
@@ -509,7 +513,7 @@ function renderChips(){
   if (type === 'exp') list.push(SAVING);
   if (editing && !list.includes(cat)) list.push(cat);
   if (!list.includes(cat)) cat = list[0];
-  $('chips').innerHTML = list.map(n => `<button class="chip${n === cat ? ' on' : ''}" data-c="${esc(n)}">${icon(n)} ${esc(n)}</button>`).join('');
+  $('chips').innerHTML = list.map(n => `<button type="button" class="chip${n === cat ? ' on' : ''}" data-c="${esc(n)}">${icon(n)} ${esc(n)}</button>`).join('');
   $('chips').querySelectorAll('.chip').forEach(b => b.onclick = () => { cat = b.dataset.c; renderChips(); });
 }
 function setType(t, keepCat){
@@ -649,12 +653,12 @@ $('saveEdit').onclick = async () => {
 };
 $('cancelEdit').onclick = stopEdit;
 // กดปุ่ม Enter / ✓ / → บนคีย์บอร์ดมือถือ = กดบันทึก
-['amount', 'note'].forEach(id => $(id).addEventListener('keydown', e => {
-  if (e.key !== 'Enter' || e.isComposing) return;
+// (ใช้ฟอร์มจริง เพราะคีย์บอร์ดไทยบน Android ไม่ส่งปุ่ม Enter มาแบบปกติเสมอไป)
+$('entryForm').addEventListener('submit', e => {
   e.preventDefault();
-  e.target.blur(); // ปิดคีย์บอร์ด
+  if (document.activeElement) document.activeElement.blur(); // ปิดคีย์บอร์ด
   (editing ? $('saveEdit') : $('save')).click();
-}));
+});
 $('tExp').onclick = () => setType('exp');
 $('tInc').onclick = () => setType('inc');
 $('prev').onclick = () => { view = new Date(view.getFullYear(), view.getMonth() - 1, 1); listen(); };
