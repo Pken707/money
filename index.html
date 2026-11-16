@@ -116,6 +116,12 @@
   .sheet h3{margin:0 0 4px;font-size:18px}
   .sheet .sum{font-size:14px;margin:10px 0 14px}
   .sheet .sum.bad{color:var(--red)}
+  .kind{flex:0 0 auto;border:1px solid var(--line);background:var(--bg);color:var(--text);border-radius:10px;padding:7px 8px;font-size:13px;font-family:inherit}
+  .due{flex:0 0 62px!important;width:62px!important;padding:7px!important;font-size:13px!important}
+  .bill{display:flex;justify-content:space-between;align-items:center;padding:9px 0;border-bottom:1px solid var(--line);font-size:14px}
+  .bill:last-child{border-bottom:0}
+  .bill .st{font-size:13px;font-weight:600}
+  .ok{color:var(--green)} .wait{color:var(--amber)} .late{color:var(--red)}
   .hidden{display:none!important}
 </style>
 </head>
@@ -196,12 +202,17 @@
     <div class="card">
       <div class="muted">ใช้จ่าย (ไม่รวมเงินออม)</div>
       <div class="balance" id="sSpend" style="margin-bottom:2px">0</div>
-      <div id="sDelta" class="delta" style="margin-bottom:12px"></div>
+      <div id="sDelta" class="delta" style="margin-bottom:4px"></div>
+      <div id="sBillLine" class="muted" style="margin-bottom:12px"></div>
       <div class="split3">
         <div class="pill in"><small>รายรับ</small><b id="sIn">0</b></div>
         <div class="pill sav"><small>ออม</small><b id="sSave">0</b></div>
         <div class="pill out" id="sAvgPill"><small id="sAvgLabel">เฉลี่ย/วัน</small><b id="sAvg">0</b></div>
       </div>
+    </div>
+    <div class="card hidden" id="sBillsCard">
+      <h2>📄 บิล<span id="sBillsMonth"></span></h2>
+      <div id="sBills"></div>
     </div>
     <div class="card" id="sBudgetCard">
       <h2>งบประมาณ <span class="muted" id="sBudgetNote"></span></h2>
@@ -273,6 +284,7 @@
 
     <div class="card">
       <h2>หมวดรายจ่าย</h2>
+      <div class="note" style="margin:0 0 8px">🍚 ทุกวัน = นับใน "ใช้ได้อีก" รายวัน · 🧴 ครั้งคราว = คุมเป็นรายสัปดาห์/เดือน · 📄 บิล = จ่ายเดือนละครั้ง ใส่วันครบกำหนดได้</div>
       <div id="expCatRows"></div>
       <div class="row" style="margin-top:10px">
         <input id="ecEmoji" class="emoji" type="text" placeholder="🏷️" maxlength="4">
@@ -299,7 +311,7 @@
         <button class="btn ghost" id="exportCsv" style="flex:1">ส่งออก CSV</button>
         <button class="btn ghost" id="logoutBtn" style="flex:1">ออกจากระบบ</button>
       </div>
-      <div class="note">เวอร์ชัน 1.8 (16 พ.ย. 2569)</div>
+      <div class="note">เวอร์ชัน 1.9 (16 พ.ย. 2569)</div>
     </div>
   </section>
 
@@ -352,6 +364,15 @@ if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js', { up
 // ---------- ค่าเริ่มต้น ----------
 const SAVING = 'เงินออม';
 const WITHDRAW = 'ถอนเงินออม';
+const DAILY_DEFAULT = ['อาหาร', 'เครื่องดื่ม', 'เดินทาง'];
+const KIND_LABEL = { daily: '🍚 ทุกวัน', occasional: '🧴 ครั้งคราว', bill: '📄 บิล' };
+function catObj(name){ return settings.cats.exp.find(c => c.name === name); }
+function kindOf(name){
+  const c = catObj(name);
+  if (c && c.kind) return c.kind;
+  return DAILY_DEFAULT.includes(name) ? 'daily' : 'occasional';
+}
+const isBill = name => kindOf(name) === 'bill';
 const DEFAULT_SETTINGS = {
   cats: {
     exp: [['🍚','อาหาร'],['🧋','เครื่องดื่ม'],['🚌','เดินทาง'],['📚','การเรียน'],['🧴','ของใช้'],['🎮','บันเทิง/เที่ยว'],['🛍️','ช้อปปิ้ง'],['📦','อื่นๆ']].map(([icon,name]) => ({icon,name})),
@@ -474,7 +495,7 @@ function period(mode, anchor){
   if (mode === 'day'){ start = startOfDay(anchor); end = addDays(start, 1); prev = addDays(start, -1); }
   else if (mode === 'week'){ start = weekStart(anchor); end = addDays(start, 7); prev = addDays(start, -7); }
   else { start = firstOfMonth(anchor); end = new Date(start.getFullYear(), start.getMonth() + 1, 1); prev = new Date(start.getFullYear(), start.getMonth() - 1, 1); }
-  return { start, end, prev };
+  return { start, end, prev, mode };
 }
 function periodLabel(mode, p){
   if (mode === 'day'){
@@ -497,9 +518,12 @@ function listen(){
   const p = period(sMode, sAnchor);
   const fromA = new Date(view.getFullYear(), view.getMonth() - 1, 1);
   const toA = new Date(view.getFullYear(), view.getMonth() + 1, 1);
-  const prevFrom = sMode === 'day' ? addDays(p.start, -7) : p.prev;
+  let prevFrom = sMode === 'day' ? addDays(p.start, -7) : p.prev;
+  const mStart = firstOfMonth(p.start), mEnd = new Date(mStart.getFullYear(), mStart.getMonth() + 1, 1);
+  if (mStart < prevFrom) prevFrom = mStart;
+  const endAt = p.end > mEnd ? p.end : mEnd;
   const from = ymd(fromA < prevFrom ? fromA : prevFrom);
-  const to = ymd(toA > p.end ? toA : p.end);
+  const to = ymd(toA > endAt ? toA : endAt);
   const key = from + '|' + to;
   if (key === curRange) { renderAll(); return; }
   curRange = key;
@@ -679,10 +703,17 @@ function dailyBudget(catName, day){
   if (!b) return 0;
   return settings.budgetUnit === 'month' ? b / daysInMonth(day) : b / 7;
 }
+// งบของช่วงเวลา: บิลนับเฉพาะรายเดือน (ยอดเต็ม) · หมวดอื่นรวมงบรายวันตามจำนวนวันจริง
 function budgetFor(catName, p){
+  if (isBill(catName)) return p.mode === 'month' ? (Number(settings.budgets[catName]) || 0) : 0;
   let t = 0;
   for (let d = new Date(p.start); d < p.end; d = addDays(d, 1)) t += dailyBudget(catName, d);
   return t;
+}
+// หมวดไหนนับในงบของโหมดนี้
+function inMode(name, mode){
+  const k = kindOf(name);
+  return mode === 'month' ? true : mode === 'week' ? k !== 'bill' : k === 'daily';
 }
 function barClass(r){ return r > 1 ? 'over' : r >= 0.8 ? 'warn' : ''; }
 function deltaHtml(cur, prev){
@@ -701,7 +732,9 @@ function renderSummary(){
 
   const cur = data.filter(x => x.date >= s && x.date < e);
   const prv = data.filter(x => x.date >= ps && x.date < s);
-  const spend = rows => rows.filter(x => x.type === 'exp' && x.cat !== SAVING);
+  const spend = rows => rows.filter(x => x.type === 'exp' && x.cat !== SAVING && (sMode === 'month' || !isBill(x.cat)));
+  const billPaid = sum(cur.filter(x => x.type === 'exp' && isBill(x.cat)));
+  $('sBillLine').textContent = sMode !== 'month' && billPaid ? `+ บิล ${fmt(billPaid)} (ไม่นับรวมด้านบน)` : '';
   const curSpend = sum(spend(cur)), prvSpend = sum(spend(prv));
   $('sSpend').textContent = fmt(curSpend);
   $('sIn').textContent = fmt(sum(cur.filter(x => x.type === 'inc' && x.cat !== WITHDRAW)));
@@ -714,7 +747,7 @@ function renderSummary(){
     $('sAvgPill').className = 'pill ' + cls;
   };
   if (sMode === 'day') {
-    const budgetedNames = settings.cats.exp.filter(c => Number(settings.budgets[c.name]) > 0).map(c => c.name);
+    const budgetedNames = settings.cats.exp.filter(c => Number(settings.budgets[c.name]) > 0 && kindOf(c.name) === 'daily').map(c => c.name);
     if (budgetedNames.length) {
       // ใช้ได้อีก = งบรายวันรวม − ที่ใช้ไปในหมวดที่ตั้งงบ
       const b = budgetedNames.reduce((t, n) => t + budgetFor(n, p), 0);
@@ -743,9 +776,9 @@ function renderSummary(){
     : `<span class="muted">${prevName[sMode]}ยังไม่มีข้อมูล</span>`;
 
   // งบประมาณ
-  const budgeted = settings.cats.exp.filter(c => Number(settings.budgets[c.name]) > 0);
+  const budgeted = settings.cats.exp.filter(c => Number(settings.budgets[c.name]) > 0 && inMode(c.name, sMode));
   $('sBudgetCard').classList.toggle('hidden', !budgeted.length);
-  $('sBudgetNote').textContent = sMode === 'day' ? '· ของวันนี้' : sMode === 'week' ? '· ของสัปดาห์นี้' : '· ของเดือนนี้';
+  $('sBudgetNote').textContent = sMode === 'day' ? '· ของวันนี้ (หมวดทุกวัน)' : sMode === 'week' ? '· ของสัปดาห์นี้ (ไม่รวมบิล)' : '· ของเดือนนี้';
   if (budgeted.length){
     let totB = 0, totS = 0;
     const rows = budgeted.map(c => {
@@ -764,6 +797,36 @@ function renderSummary(){
     };
     $('sBudget').innerHTML = bar('<b>รวมทุกหมวด</b>', totS, totB) +
       rows.sort((a,b) => b.r - a.r).map(x => bar(`${x.c.icon} ${esc(x.c.name)}`, x.sp, x.b)).join('');
+  }
+
+  // บิลของเดือน (เดือนของวันแรกในช่วงที่ดูอยู่)
+  const bills = settings.cats.exp.filter(c => kindOf(c.name) === 'bill');
+  $('sBillsCard').classList.toggle('hidden', !bills.length);
+  if (bills.length) {
+    const ms = firstOfMonth(p.start), me = new Date(ms.getFullYear(), ms.getMonth() + 1, 1);
+    const dim = daysInMonth(ms), today = startOfDay(new Date());
+    const thisMonth = monthKey(ms) === monthKey(today), past = me <= today;
+    $('sBillsMonth').textContent = ` · ${TH_M[ms.getMonth()]} ${ms.getFullYear() + 543}`;
+    $('sBills').innerHTML = bills.map(c => {
+      const amt = Number(settings.budgets[c.name]) || 0;
+      const paid = sum(data.filter(x => x.type === 'exp' && x.cat === c.name && x.date >= ymd(ms) && x.date < ymd(me)));
+      let st;
+      if (paid > 0 && paid >= amt) st = `<span class="st ok">✅ จ่ายแล้ว ${fmt(paid)}</span>`;
+      else {
+        const dueDay = c.due ? Math.min(c.due, dim) : 0;
+        const partial = paid > 0 ? ` (จ่ายแล้ว ${fmt(paid)})` : '';
+        if (past) st = `<span class="st late">🔴 ยังไม่ได้จด${partial}</span>`;
+        else if (!thisMonth) st = `<span class="st wait">⏳ ${dueDay ? `ครบกำหนดวันที่ ${dueDay}` : 'ยังไม่ถึงเดือน'}</span>`;
+        else if (!dueDay) st = `<span class="st wait">⏳ ยังไม่จ่าย${partial}</span>`;
+        else {
+          const diff = dueDay - today.getDate();
+          st = diff > 0 ? `<span class="st wait">⏳ อีก ${diff} วัน (วันที่ ${dueDay})${partial}</span>`
+             : diff === 0 ? `<span class="st late">⏰ ครบกำหนดวันนี้${partial}</span>`
+             : `<span class="st late">🔴 เลยกำหนด ${-diff} วัน${partial}</span>`;
+        }
+      }
+      return `<div class="bill"><span>${esc(c.icon)} ${esc(c.name)}${amt ? ` <span class="muted">${fmt(amt)}</span>` : ''}</span>${st}</div>`;
+    }).join('');
   }
 
   // แยกตามหมวด
@@ -870,6 +933,7 @@ $('bUnit').querySelectorAll('button').forEach(b => b.onclick = () => {
   const u = b.dataset.u; if (u === uiUnit) return;
   const dim = daysInMonth(new Date());
   $('budgetRows').querySelectorAll('input').forEach(i => {
+    if (isBill(i.dataset.b)) return; // บิลเป็นยอดต่อเดือนเสมอ
     const v = parseFloat(i.dataset.exact); if (!(v > 0)) return;
     const n = u === 'week' ? v * 7 / dim : v * dim / 7;
     i.dataset.exact = n;            // เก็บค่าละเอียดไว้ สลับไปมากี่ครั้งก็ไม่เพี้ยน
@@ -896,7 +960,7 @@ $('suggestBudgets').onclick = async () => {
     const spent = sum(rows.filter(x => x.cat === i.dataset.b));
     if (!spent) { i.value = ''; i.dataset.exact = ''; return; }
     const perWeek = spent * 7 / days;
-    const v = uiUnit === 'week' ? perWeek : perWeek * dim / 7;
+    const v = (uiUnit === 'week' && !isBill(i.dataset.b)) ? perWeek : perWeek * dim / 7;
     i.value = i.dataset.exact = Math.ceil(v / 10) * 10; filled++;
   });
   toast(`ใส่ตัวเลขจาก ${days} วันที่ผ่านมาแล้ว กด "บันทึกงบ" เพื่อยืนยัน`);
@@ -904,7 +968,7 @@ $('suggestBudgets').onclick = async () => {
 function renderSettings(){
   setUnitUI(settings.budgetUnit || 'week');
   $('budgetRows').innerHTML = settings.cats.exp.map(c => `
-    <div class="setrow"><span>${esc(c.icon)} ${esc(c.name)}</span>
+    <div class="setrow"><span>${esc(c.icon)} ${esc(c.name)}${isBill(c.name) ? ' <span class="muted">/เดือน (บิล)</span>' : ''}</span>
     <input type="number" inputmode="decimal" min="0" placeholder="-" data-b="${esc(c.name)}" data-exact="${settings.budgets[c.name] || ''}" value="${settings.budgets[c.name] ? Math.round(settings.budgets[c.name]) : ''}"></div>`).join('');
   $('budgetRows').querySelectorAll('input').forEach(i => i.oninput = () => { i.dataset.exact = i.value; });
 
@@ -920,7 +984,27 @@ function renderSettings(){
 
   const catRows = (t, el) => {
     $(el).innerHTML = settings.cats[t].map((c, i) => `
-      <div class="setrow"><span>${esc(c.icon)} ${esc(c.name)}</span><button class="x" data-t="${t}" data-ci="${i}">×</button></div>`).join('');
+      <div class="setrow"><span>${esc(c.icon)} ${esc(c.name)}</span>
+      ${t === 'exp' ? `<select class="kind" data-ki="${i}">${Object.entries(KIND_LABEL).map(([k, l]) => `<option value="${k}"${kindOf(c.name) === k ? ' selected' : ''}>${l}</option>`).join('')}</select>` : ''}
+      ${t === 'exp' && kindOf(c.name) === 'bill' ? `<input class="due" type="number" inputmode="numeric" min="1" max="31" placeholder="วันที่" data-di="${i}" value="${c.due || ''}">` : ''}
+      <button class="x" data-t="${t}" data-ci="${i}">×</button></div>`).join('');
+    $(el).querySelectorAll('[data-ki]').forEach(sel => sel.onchange = () => {
+      const c = settings.cats.exp[+sel.dataset.ki], wasBill = isBill(c.name);
+      c.kind = sel.value;
+      // สลับเข้า/ออกจากบิล: แปลงงบให้อยู่ในหน่วยที่ถูกต้อง (บิล = ต่อเดือน)
+      const v = Number(settings.budgets[c.name]) || 0;
+      if (v && settings.budgetUnit === 'week' && wasBill !== (c.kind === 'bill')) {
+        const dim = daysInMonth(new Date());
+        settings.budgets[c.name] = c.kind === 'bill' ? v * dim / 7 : v * 7 / dim;
+      }
+      if (c.kind !== 'bill') delete c.due;
+      saveSettings(); refreshSettingsUI();
+    });
+    $(el).querySelectorAll('[data-di]').forEach(inp => inp.onchange = () => {
+      const c = settings.cats.exp[+inp.dataset.di], d = parseInt(inp.value, 10);
+      if (d >= 1 && d <= 31) c.due = d; else delete c.due;
+      saveSettings(); toast(c.due ? `ครบกำหนดทุกวันที่ ${c.due} ✓` : 'ลบวันครบกำหนดแล้ว');
+    });
     $(el).querySelectorAll('[data-ci]').forEach(b => b.onclick = () => {
       if (settings.cats[t].length <= 1) { toast('ต้องมีอย่างน้อย 1 หมวด'); return; }
       const c = settings.cats[t][+b.dataset.ci];
