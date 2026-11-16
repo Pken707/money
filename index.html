@@ -145,12 +145,15 @@
 
     <div class="card">
       <div class="muted">คงเหลือเดือนนี้</div>
-      <div class="balance" id="balance">0</div>
+      <div class="balance" id="balance" style="margin-bottom:4px">0</div>
+      <div class="muted" id="carryLine" style="margin-bottom:12px"></div>
       <div class="split">
         <div class="pill in"><small>รายรับ</small><b id="sumIn">0</b></div>
         <div class="pill out"><small>รายจ่าย</small><b id="sumOut">0</b></div>
       </div>
     </div>
+
+    <div class="card hidden" id="closeCard"></div>
 
     <div class="card" id="quickCard">
       <h2>⚡ ปุ่มลัด (แตะเพื่อบันทึกทันที)</h2>
@@ -204,6 +207,7 @@
       <div class="balance" id="sSpend" style="margin-bottom:2px">0</div>
       <div id="sDelta" class="delta" style="margin-bottom:4px"></div>
       <div id="sBillLine" class="muted" style="margin-bottom:12px"></div>
+      <div id="sCloseBox" class="hidden" style="margin-bottom:12px"></div>
       <div class="split3">
         <div class="pill in"><small>รายรับ</small><b id="sIn">0</b></div>
         <div class="pill sav"><small>ออม</small><b id="sSave">0</b></div>
@@ -269,6 +273,13 @@
     </div>
 
     <div class="card">
+      <h2>ตัดยอดสิ้นเดือน</h2>
+      <div class="setrow"><span>💵 เงินสดติดกระเป๋า</span>
+        <input type="number" inputmode="decimal" min="0" id="cashFloat" placeholder="0"></div>
+      <div class="note">ตอนตัดยอด แอปจะเสนอให้ยกเงินจำนวนนี้ไปใช้เดือนหน้า ส่วนที่เหลือย้ายเข้าออม (แก้ตัวเลขได้ทุกครั้ง)</div>
+    </div>
+
+    <div class="card">
       <h2>ปุ่มลัด</h2>
       <div id="quickRows"></div>
       <div class="row" style="margin-top:10px">
@@ -311,7 +322,7 @@
         <button class="btn ghost" id="exportCsv" style="flex:1">ส่งออก CSV</button>
         <button class="btn ghost" id="logoutBtn" style="flex:1">ออกจากระบบ</button>
       </div>
-      <div class="note">เวอร์ชัน 1.9 (16 พ.ย. 2569)</div>
+      <div class="note">เวอร์ชัน 2.0 (16 พ.ย. 2569)</div>
     </div>
   </section>
 
@@ -322,6 +333,20 @@
   <button data-p="goals"><span>🎯</span>เป้าหมาย</button>
   <button data-p="settings"><span>⚙️</span>ตั้งค่า</button>
 </nav>
+</div>
+<div class="modal hidden" id="closeModal">
+  <div class="sheet">
+    <h3 id="closeTitle">ตัดยอด</h3>
+    <div class="muted" id="closeSub"></div>
+    <div class="setrow" style="margin-top:10px"><span>💰 ย้ายเข้าออม</span>
+      <input type="number" inputmode="decimal" min="0" id="closeSave" enterkeyhint="done"></div>
+    <div class="setrow"><span>💵 ยกไปเดือนหน้า</span><b id="closeCarry">0</b></div>
+    <div class="sum" id="closeMsg"></div>
+    <div class="row">
+      <button class="btn ghost" id="closeCancel" style="flex:1">ยกเลิก</button>
+      <button class="btn" id="closeOk" style="flex:2">ตัดยอด</button>
+    </div>
+  </div>
 </div>
 <div class="modal hidden" id="splitModal">
   <div class="sheet">
@@ -364,6 +389,8 @@ if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js', { up
 // ---------- ค่าเริ่มต้น ----------
 const SAVING = 'เงินออม';
 const WITHDRAW = 'ถอนเงินออม';
+const CARRY_OUT = 'ยกยอดไปเดือนหน้า', CARRY_IN = 'ยกยอดจากเดือนก่อน';
+const isCarry = c => c === CARRY_OUT || c === CARRY_IN;
 const DAILY_DEFAULT = ['อาหาร', 'เครื่องดื่ม', 'เดินทาง'];
 const KIND_LABEL = { daily: '🍚 ทุกวัน', occasional: '🧴 ครั้งคราว', bill: '📄 บิล' };
 function catObj(name){ return settings.cats.exp.find(c => c.name === name); }
@@ -470,6 +497,8 @@ function askSplit(total){
 function icon(name){
   if (name === SAVING) return '💰';
   if (name === WITHDRAW) return '🏦';
+  if (name === CARRY_OUT) return '📤';
+  if (name === CARRY_IN) return '📥';
   const c = [...settings.cats.exp, ...settings.cats.inc].find(c => c.name === name);
   return c ? c.icon : '•';
 }
@@ -583,17 +612,24 @@ function renderRecord(){
     .sort((a,b) => b.date.localeCompare(a.date) || (b.created || 0) - (a.created || 0));
   const sIn = sum(rows.filter(x => x.type === 'inc'));
   const sOut = sum(rows.filter(x => x.type === 'exp'));
-  $('sumIn').textContent = fmt(sIn);
-  $('sumOut').textContent = fmt(sOut);
+  const cIn = sum(rows.filter(x => x.cat === CARRY_IN)), cOut = sum(rows.filter(x => x.cat === CARRY_OUT));
+  $('sumIn').textContent = fmt(sIn - cIn);
+  $('sumOut').textContent = fmt(sOut - cOut);
   $('balance').textContent = fmt(sIn - sOut);
+  const closedSave = sum(rows.filter(x => x.closeOf === mk && x.cat === SAVING));
+  const lines = [];
+  if (cIn) lines.push(`📥 ยกยอดมาจากเดือนก่อน ${fmt(cIn)}`);
+  if (rows.some(x => x.closeOf === mk)) lines.push(`✅ ตัดยอดแล้ว: ออม ${fmt(closedSave)} · ยกไป ${fmt(cOut)}`);
+  $('carryLine').textContent = lines.join(' · ');
+  renderCloseCard();
   const s = streak();
   $('streak').textContent = s > 0 ? `🔥 จดต่อเนื่อง ${s} วัน` : '';
 
   const byCat = {};
-  rows.filter(x => x.type === 'exp').forEach(x => byCat[x.cat] = (byCat[x.cat] || 0) + x.amount);
+  rows.filter(x => x.type === 'exp' && x.cat !== CARRY_OUT).forEach(x => byCat[x.cat] = (byCat[x.cat] || 0) + x.amount);
   const cats = Object.entries(byCat).sort((a,b) => b[1] - a[1]);
   $('bars').innerHTML = cats.length ? cats.map(([c,v]) => `
-    <div class="bar"><div class="bar-top"><span>${icon(c)} ${esc(c)}</span><span class="r">${fmt(v)} (${Math.round(v / sOut * 100)}%)</span></div>
+    <div class="bar"><div class="bar-top"><span>${icon(c)} ${esc(c)}</span><span class="r">${fmt(v)} (${Math.round(v / (sOut - cOut) * 100)}%)</span></div>
     <div class="bar-track"><div class="bar-fill" style="width:${v / cats[0][1] * 100}%"></div></div></div>`).join('')
     : '<div class="empty">ยังไม่มีรายจ่ายเดือนนี้</div>';
 
@@ -732,12 +768,13 @@ function renderSummary(){
 
   const cur = data.filter(x => x.date >= s && x.date < e);
   const prv = data.filter(x => x.date >= ps && x.date < s);
-  const spend = rows => rows.filter(x => x.type === 'exp' && x.cat !== SAVING && (sMode === 'month' || !isBill(x.cat)));
+  const spend = rows => rows.filter(x => x.type === 'exp' && x.cat !== SAVING && x.cat !== CARRY_OUT && (sMode === 'month' || !isBill(x.cat)));
   const billPaid = sum(cur.filter(x => x.type === 'exp' && isBill(x.cat)));
   $('sBillLine').textContent = sMode !== 'month' && billPaid ? `+ บิล ${fmt(billPaid)} (ไม่นับรวมด้านบน)` : '';
   const curSpend = sum(spend(cur)), prvSpend = sum(spend(prv));
   $('sSpend').textContent = fmt(curSpend);
-  $('sIn').textContent = fmt(sum(cur.filter(x => x.type === 'inc' && x.cat !== WITHDRAW)));
+  $('sIn').textContent = fmt(sum(cur.filter(x => x.type === 'inc' && x.cat !== WITHDRAW && x.cat !== CARRY_IN)));
+  renderCloseBox(p);
   $('sSave').textContent = fmt(sum(cur.filter(x => x.cat === SAVING && x.type === 'exp')) - sum(cur.filter(x => x.cat === WITHDRAW)));
   // วันแรกที่เริ่มจด (ไม่นับวันก่อนเริ่มใช้แอป เพื่อให้ค่าเฉลี่ยสมจริง)
   const firstStr = data.filter(x => x.type === 'exp').reduce((m, x) => (!m || x.date < m) ? x.date : m, null);
@@ -967,6 +1004,7 @@ $('suggestBudgets').onclick = async () => {
 };
 function renderSettings(){
   setUnitUI(settings.budgetUnit || 'week');
+  $('cashFloat').value = settings.cashFloat || '';
   $('budgetRows').innerHTML = settings.cats.exp.map(c => `
     <div class="setrow"><span>${esc(c.icon)} ${esc(c.name)}${isBill(c.name) ? ' <span class="muted">/เดือน (บิล)</span>' : ''}</span>
     <input type="number" inputmode="decimal" min="0" placeholder="-" data-b="${esc(c.name)}" data-exact="${settings.budgets[c.name] || ''}" value="${settings.budgets[c.name] ? Math.round(settings.budgets[c.name]) : ''}"></div>`).join('');
@@ -1057,6 +1095,110 @@ $('exportCsv').onclick = async () => {
 $('logoutBtn').onclick = () => { if (confirm('ออกจากระบบ?')) signOut(auth); };
 
 // ---------- แท็บ ----------
+// ---------- ตัดยอดสิ้นเดือน ----------
+const monthOf = mk => new Date(+mk.slice(0,4), +mk.slice(5,7) - 1, 1);
+const monthName = mk => { const d = monthOf(mk); return `${TH_M[d.getMonth()]} ${d.getFullYear() + 543}`; };
+const isClosed = mk => data.some(x => x.closeOf === mk);
+function leftoverOf(mk){
+  const rows = data.filter(x => x.date.slice(0,7) === mk);
+  return Math.round((sum(rows.filter(x => x.type === 'inc')) - sum(rows.filter(x => x.type === 'exp'))) * 100) / 100;
+}
+// การ์ดในหน้าบันทึก: วันที่ 1–7 ของเดือนใหม่ ถ้ายังไม่ได้ตัดยอดเดือนก่อน
+function renderCloseCard(){
+  const today = new Date();
+  const pm = monthKey(new Date(today.getFullYear(), today.getMonth() - 1, 1));
+  const show = today.getDate() <= 7 && monthKey(view) === monthKey(today) && !isClosed(pm)
+    && data.some(x => x.date.slice(0,7) === pm) && !(settings.dismissed || {})[pm];
+  $('closeCard').classList.toggle('hidden', !show);
+  if (!show) return;
+  const L = leftoverOf(pm);
+  $('closeCard').innerHTML = L > 0
+    ? `<h2>📅 ตัดยอดเดือน ${monthName(pm)}</h2>
+       <div class="balance" style="margin-bottom:4px">${fmt(L)}</div>
+       <div class="muted" style="margin-bottom:12px">เงินที่เหลือจากเดือนที่แล้ว ย้ายเข้าออมได้เลย</div>
+       <button class="btn save" style="margin-top:0" id="closeCardBtn">ตัดยอดเข้าออม</button>`
+    : `<h2>📅 สรุปเดือน ${monthName(pm)}</h2>
+       <div class="muted" style="margin-bottom:12px">${L < 0 ? `<span class="up">ใช้เกินรายรับ ${fmt(-L)} บาท</span> ลองดูหน้าสรุปว่าหมวดไหนใช้เยอะ` : 'ใช้พอดีกับรายรับ ไม่มีเงินเหลือให้ตัดยอด'}</div>
+       <button class="btn ghost save" style="margin-top:0" id="closeCardBtn">รับทราบ</button>`;
+  $('closeCardBtn').onclick = () => {
+    if (L > 0) openClose(pm);
+    else { settings.dismissed = { ...(settings.dismissed || {}), [pm]: true }; saveSettings(); renderCloseCard(); }
+  };
+}
+// กล่องในหน้าสรุปรายเดือน
+function renderCloseBox(p){
+  const box = $('sCloseBox');
+  const mk = monthKey(p.start);
+  const notFuture = p.start <= new Date();
+  if (sMode !== 'month' || !notFuture) { box.classList.add('hidden'); return; }
+  box.classList.remove('hidden');
+  if (isClosed(mk)) {
+    box.innerHTML = `<div class="row" style="align-items:center"><span class="muted" style="flex:1">✅ ตัดยอดเดือนนี้แล้ว</span>
+      <button class="btn ghost" id="undoClose" style="padding:8px 12px;font-size:13px">ยกเลิกการตัดยอด</button></div>`;
+    $('undoClose').onclick = () => {
+      if (!confirm(`ยกเลิกการตัดยอดเดือน ${monthName(mk)}?\n(รายการออม/ยกยอดที่สร้างตอนตัดยอดจะถูกลบ)`)) return;
+      const batch = writeBatch(db);
+      data.filter(x => x.closeOf === mk).forEach(x => { batch.delete(doc(col('entries'), x.id)); applyAlloc(batch, allocOf(x), -1); });
+      batch.commit().catch(() => toast('ยกเลิกไม่สำเร็จ'));
+    };
+  } else {
+    const L = leftoverOf(mk);
+    box.innerHTML = L > 0
+      ? `<button class="btn ghost" id="openCloseBtn" style="width:100%">📅 ตัดยอดเดือนนี้ (เหลือ ${fmt(L)})</button>`
+      : `<div class="muted">${L < 0 ? `เดือนนี้ใช้เกินรายรับ ${fmt(-L)} · ไม่มีเงินเหลือให้ตัดยอด` : ''}</div>`;
+    if (L > 0) $('openCloseBtn').onclick = () => openClose(mk);
+  }
+}
+function openClose(mk){
+  const L = leftoverOf(mk);
+  if (!(L > 0)) return;
+  const float = Number(settings.cashFloat) || 0;
+  $('closeTitle').textContent = `ตัดยอดเดือน ${monthName(mk)}`;
+  $('closeSub').textContent = `เหลือทั้งหมด ${fmt(L)} บาท (รวมเงินในบัญชีและเงินสด)`;
+  $('closeSave').value = Math.max(0, Math.round((L - float) * 100) / 100);
+  const upd = () => {
+    const v = parseFloat($('closeSave').value) || 0;
+    const ok = v >= 0 && v <= L + 0.001;
+    $('closeCarry').textContent = ok ? fmt(Math.round((L - v) * 100) / 100) : '–';
+    $('closeMsg').textContent = ok ? (v > 0 ? `อย่าลืมโอน ${fmt(v)} บาทเข้าบัญชีออมจริงด้วย` : 'ยกไปเดือนหน้าทั้งหมด ไม่ออมเดือนนี้') : `ย้ายได้ไม่เกิน ${fmt(L)}`;
+    $('closeMsg').classList.toggle('bad', !ok);
+    $('closeOk').disabled = !ok; $('closeOk').style.opacity = ok ? 1 : .4;
+  };
+  $('closeSave').oninput = upd; upd();
+  $('closeSave').onkeydown = e => { if (e.key === 'Enter' || e.keyCode === 13) { e.preventDefault(); if (!$('closeOk').disabled) $('closeOk').click(); } };
+  $('closeCancel').onclick = () => $('closeModal').classList.add('hidden');
+  $('closeOk').onclick = async () => {
+    const save = Math.round((parseFloat($('closeSave').value) || 0) * 100) / 100;
+    const carry = Math.round((L - save) * 100) / 100;
+    $('closeModal').classList.add('hidden');
+    let alloc = null;
+    if (save > 0 && goals.length) { alloc = await askSplit(save); if (!alloc) return; }
+    const d = monthOf(mk);
+    const lastDay = ymd(new Date(d.getFullYear(), d.getMonth() + 1, 0));
+    const nextFirst = ymd(new Date(d.getFullYear(), d.getMonth() + 1, 1));
+    const now = Date.now();
+    const batch = writeBatch(db);
+    if (save > 0) {
+      const e = { date: lastDay, type: 'exp', cat: SAVING, amount: save, note: `ตัดยอด ${monthName(mk)}`, closeOf: mk, created: now };
+      if (alloc) e.alloc = alloc;
+      batch.set(doc(col('entries')), e);
+      applyAlloc(batch, alloc, 1);
+    }
+    if (carry > 0) {
+      batch.set(doc(col('entries')), { date: lastDay, type: 'exp', cat: CARRY_OUT, amount: carry, note: 'ยกไปใช้เดือนหน้า', closeOf: mk, created: now + 1 });
+      batch.set(doc(col('entries')), { date: nextFirst, type: 'inc', cat: CARRY_IN, amount: carry, note: `ยกยอดจาก ${monthName(mk)}`, closeOf: mk, created: now + 2 });
+    }
+    batch.commit().catch(() => toast('ตัดยอดไม่สำเร็จ'));
+    toast(save > 0 ? `ตัดยอดแล้ว ✓ อย่าลืมโอน ${fmt(save)} เข้าบัญชีออม` : 'ยกยอดไปเดือนหน้าแล้ว ✓', 'โอเค', () => {});
+  };
+  $('closeModal').classList.remove('hidden');
+  setTimeout(() => $('closeSave').focus(), 50);
+}
+$('cashFloat').onchange = () => {
+  const v = parseFloat($('cashFloat').value);
+  settings.cashFloat = v > 0 ? v : 0; saveSettings(); toast('บันทึกแล้ว ✓');
+};
+
 function showPage(p){
   page = p;
   ['record','summary','goals','settings'].forEach(x => $('pg-' + x).classList.toggle('hidden', x !== p));
