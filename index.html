@@ -299,7 +299,7 @@
         <button class="btn ghost" id="exportCsv" style="flex:1">ส่งออก CSV</button>
         <button class="btn ghost" id="logoutBtn" style="flex:1">ออกจากระบบ</button>
       </div>
-      <div class="note">เวอร์ชัน 1.7 (16 พ.ย. 2569)</div>
+      <div class="note">เวอร์ชัน 1.8 (16 พ.ย. 2569)</div>
     </div>
   </section>
 
@@ -755,8 +755,9 @@ function renderSummary(){
       return { c, b, sp, r: sp / b };
     });
     const bar = (label, sp, b) => {
-      const r = sp / b;
-      const left = b - sp;
+      b = Math.round(b);
+      const r = b ? sp / b : 1;
+      const left = Math.round(b - sp);
       return `<div class="bar"><div class="bar-top"><span>${label}</span><span class="r">${fmt(sp)} / ${fmt(b)}</span></div>
         <div class="bar-track"><div class="bar-fill ${barClass(r)}" style="width:${Math.min(100, r * 100)}%"></div></div>
         <div class="muted" style="margin-top:3px">${left >= 0 ? `เหลือ ${fmt(left)}` : `<span class="up">เกินงบ ${fmt(-left)}</span>`}</div></div>`;
@@ -869,8 +870,10 @@ $('bUnit').querySelectorAll('button').forEach(b => b.onclick = () => {
   const u = b.dataset.u; if (u === uiUnit) return;
   const dim = daysInMonth(new Date());
   $('budgetRows').querySelectorAll('input').forEach(i => {
-    const v = parseFloat(i.value); if (!(v > 0)) return;
-    i.value = Math.round(u === 'week' ? v * 7 / dim : v * dim / 7);
+    const v = parseFloat(i.dataset.exact); if (!(v > 0)) return;
+    const n = u === 'week' ? v * 7 / dim : v * dim / 7;
+    i.dataset.exact = n;            // เก็บค่าละเอียดไว้ สลับไปมากี่ครั้งก็ไม่เพี้ยน
+    i.value = Math.round(n);        // แสดงเป็นจำนวนเต็ม
   });
   setUnitUI(u);
 });
@@ -891,10 +894,10 @@ $('suggestBudgets').onclick = async () => {
   let filled = 0;
   $('budgetRows').querySelectorAll('input').forEach(i => {
     const spent = sum(rows.filter(x => x.cat === i.dataset.b));
-    if (!spent) { i.value = ''; return; }
+    if (!spent) { i.value = ''; i.dataset.exact = ''; return; }
     const perWeek = spent * 7 / days;
     const v = uiUnit === 'week' ? perWeek : perWeek * dim / 7;
-    i.value = Math.ceil(v / 10) * 10; filled++;
+    i.value = i.dataset.exact = Math.ceil(v / 10) * 10; filled++;
   });
   toast(`ใส่ตัวเลขจาก ${days} วันที่ผ่านมาแล้ว กด "บันทึกงบ" เพื่อยืนยัน`);
 };
@@ -902,7 +905,8 @@ function renderSettings(){
   setUnitUI(settings.budgetUnit || 'week');
   $('budgetRows').innerHTML = settings.cats.exp.map(c => `
     <div class="setrow"><span>${esc(c.icon)} ${esc(c.name)}</span>
-    <input type="number" inputmode="decimal" min="0" placeholder="-" data-b="${esc(c.name)}" value="${settings.budgets[c.name] || ''}"></div>`).join('');
+    <input type="number" inputmode="decimal" min="0" placeholder="-" data-b="${esc(c.name)}" data-exact="${settings.budgets[c.name] || ''}" value="${settings.budgets[c.name] ? Math.round(settings.budgets[c.name]) : ''}"></div>`).join('');
+  $('budgetRows').querySelectorAll('input').forEach(i => i.oninput = () => { i.dataset.exact = i.value; });
 
   $('quickRows').innerHTML = settings.quick.length ? settings.quick.map((q, i) => `
     <div class="setrow"><span>${esc(q.icon || icon(q.cat))} ${esc(q.label)} · ${fmt(q.amount)} <span class="muted">(${esc(q.cat)})</span></span>
@@ -933,7 +937,7 @@ function renderSettings(){
 function refreshSettingsUI(){ renderSettings(); renderChips(); renderQuick(); renderAll(); }
 $('saveBudgets').onclick = () => {
   const b = {};
-  $('budgetRows').querySelectorAll('input').forEach(i => { const v = parseFloat(i.value); if (v > 0) b[i.dataset.b] = v; });
+  $('budgetRows').querySelectorAll('input').forEach(i => { const v = parseFloat(i.dataset.exact || i.value); if (v > 0) b[i.dataset.b] = v; });
   settings.budgets = b; settings.budgetUnit = uiUnit; saveSettings();
   toast(`บันทึกงบ${uiUnit === 'week' ? 'รายสัปดาห์' : 'รายเดือน'}แล้ว ✓`);
 };
@@ -1000,9 +1004,7 @@ onAuthStateChanged(auth, u => {
     const s = snap.data();
     settings = s ? { ...structuredClone(DEFAULT_SETTINGS), ...s } : structuredClone(DEFAULT_SETTINGS);
     if (s && !s.budgetUnit) {
-      // งบที่ตั้งไว้ก่อนหน้านี้เป็นรายเดือน → แปลงเป็นรายสัปดาห์ตามจำนวนวันจริงของเดือนนี้
-      const dim = daysInMonth(new Date());
-      for (const k in settings.budgets) settings.budgets[k] = Math.round(settings.budgets[k] * 7 / dim);
+      // งบที่ตั้งไว้ก่อนเวอร์ชันนี้: ใช้ตัวเลขเดิม และนับเป็นงบรายสัปดาห์
       settings.budgetUnit = 'week';
       if (!snap.metadata.fromCache) saveSettings();
     }
