@@ -200,7 +200,7 @@
       <div class="split3">
         <div class="pill in"><small>รายรับ</small><b id="sIn">0</b></div>
         <div class="pill sav"><small>ออม</small><b id="sSave">0</b></div>
-        <div class="pill out"><small>เฉลี่ย/วัน</small><b id="sAvg">0</b></div>
+        <div class="pill out" id="sAvgPill"><small id="sAvgLabel">เฉลี่ย/วัน</small><b id="sAvg">0</b></div>
       </div>
     </div>
     <div class="card" id="sBudgetCard">
@@ -292,7 +292,7 @@
         <button class="btn ghost" id="exportCsv" style="flex:1">ส่งออก CSV</button>
         <button class="btn ghost" id="logoutBtn" style="flex:1">ออกจากระบบ</button>
       </div>
-      <div class="note">เวอร์ชัน 1.5 (16 พ.ย. 2569)</div>
+      <div class="note">เวอร์ชัน 1.6 (16 พ.ย. 2569)</div>
     </div>
   </section>
 
@@ -489,7 +489,8 @@ function listen(){
   const p = period(sMode, sAnchor);
   const fromA = new Date(view.getFullYear(), view.getMonth() - 1, 1);
   const toA = new Date(view.getFullYear(), view.getMonth() + 1, 1);
-  const from = ymd(fromA < p.prev ? fromA : p.prev);
+  const prevFrom = sMode === 'day' ? addDays(p.start, -7) : p.prev;
+  const from = ymd(fromA < prevFrom ? fromA : prevFrom);
   const to = ymd(toA > p.end ? toA : p.end);
   const key = from + '|' + to;
   if (key === curRange) { renderAll(); return; }
@@ -693,11 +694,37 @@ function renderSummary(){
   $('sSpend').textContent = fmt(curSpend);
   $('sIn').textContent = fmt(sum(cur.filter(x => x.type === 'inc' && x.cat !== WITHDRAW)));
   $('sSave').textContent = fmt(sum(cur.filter(x => x.cat === SAVING && x.type === 'exp')) - sum(cur.filter(x => x.cat === WITHDRAW)));
-  // เฉลี่ยต่อวัน: นับเฉพาะวันที่ผ่านมาแล้วในช่วงนี้
-  const today = startOfDay(new Date());
-  const lastDay = p.end > today ? addDays(today, 1) : p.end;
-  const days = Math.max(1, Math.round((lastDay - p.start) / 86400000));
-  $('sAvg').textContent = fmt(Math.round(curSpend / days));
+  // วันแรกที่เริ่มจด (ไม่นับวันก่อนเริ่มใช้แอป เพื่อให้ค่าเฉลี่ยสมจริง)
+  const firstStr = data.filter(x => x.type === 'exp').reduce((m, x) => (!m || x.date < m) ? x.date : m, null);
+  const firstDay = firstStr ? new Date(+firstStr.slice(0,4), +firstStr.slice(5,7) - 1, +firstStr.slice(8,10)) : p.start;
+  const pill = (label, value, cls) => {
+    $('sAvgLabel').textContent = label; $('sAvg').textContent = value;
+    $('sAvgPill').className = 'pill ' + cls;
+  };
+  if (sMode === 'day') {
+    const budgetedNames = settings.cats.exp.filter(c => Number(settings.budgets[c.name]) > 0).map(c => c.name);
+    if (budgetedNames.length) {
+      // ใช้ได้อีก = งบรายวันรวม − ที่ใช้ไปในหมวดที่ตั้งงบ
+      const b = budgetedNames.reduce((t, n) => t + budgetFor(n, p), 0);
+      const used = sum(cur.filter(x => x.type === 'exp' && budgetedNames.includes(x.cat)));
+      const left = Math.round(b - used);
+      left >= 0 ? pill('ใช้ได้อีก', fmt(left), 'sav') : pill('เกินงบ', fmt(-left), 'out');
+    } else {
+      // ปกติวันละ = เฉลี่ย 7 วันก่อนหน้า (นับเฉพาะวันหลังเริ่มจด)
+      const from7 = addDays(p.start, -7);
+      const startAt = firstDay > from7 ? firstDay : from7;
+      const nDays = Math.round((p.start - startAt) / 86400000);
+      const prev7 = sum(spend(data.filter(x => x.date >= ymd(startAt) && x.date < s)));
+      pill('ปกติวันละ', nDays > 0 ? fmt(Math.round(prev7 / nDays)) : '–', 'out');
+    }
+  } else {
+    // เฉลี่ยต่อวัน: นับตั้งแต่วันแรกที่จด ถึงวันนี้ (หรือสิ้นสุดช่วง)
+    const today = startOfDay(new Date());
+    const lastDay = p.end > today ? addDays(today, 1) : p.end;
+    const startAt = firstDay > p.start ? firstDay : p.start;
+    const days = Math.max(1, Math.round((lastDay - startAt) / 86400000));
+    pill('เฉลี่ย/วัน', fmt(Math.round(curSpend / days)), 'out');
+  }
   const dHtml = deltaHtml(curSpend, prvSpend);
   $('sDelta').innerHTML = prvSpend
     ? `${dHtml} <span class="muted">จาก${prevName[sMode]} (${fmt(prvSpend)})</span>`
